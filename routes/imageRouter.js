@@ -6,7 +6,7 @@ const mime = require("mime-types");
 
 const imageUploader = require("../middlewares/imageUploader");
 const Image = require("../models/Image");
-const { s3, getSignedUrl } = require("../aws");
+const { s3, getPresignedPost, getPresigned } = require("../aws");
 
 const router = Router();
 
@@ -19,13 +19,24 @@ router.post("/presigned", async (req, res) => {
     const presignedData = await Promise.all(
       contentTypes.map(async (contentType) => {
         const imageKey = `${uuid()}.${mime.extension(contentType)}`;
-        const key = `raw/${imageKey}`;
-        const presigned = await getSignedUrl(key);
+        const presigned = await getPresignedPost(imageKey);
         return { imageKey, presigned };
       })
     );
 
     return res.status(200).json(presignedData);
+  } catch (err) {
+    console.error(err);
+    throw new Error("INTERNAL_SERVER_ERROR");
+  }
+});
+
+router.get("/presigned/:key", async (req, res) => {
+  try {
+    if (!req.user) return res.status(401).json({ message: "UNAUTHORIZED" });
+    const { key } = req.params;
+    const url = await getPresigned(key);
+    return res.status(200).json({ url });
   } catch (err) {
     console.error(err);
     throw new Error("INTERNAL_SERVER_ERROR");
@@ -56,32 +67,6 @@ router.post("/", imageUploader.array("images", 10), async (req, res) => {
     throw new Error("INTERNAL_SERVER_ERROR");
   }
 });
-
-// router.post("/", imageUploader.array("images", 10), async (req, res) => {
-//   try {
-//     if (!req.user) return res.status(401).json({ message: "UNAUTHORIZED" });
-//     if (!req.files) return res.status(400).json({ message: "BAD_REQUEST" });
-//     const images = await Promise.all(
-//       req.files.map(async (file) => {
-//         const image = await new Image({
-//           key: file.key.replace("raw/", ""), // UUID + extension type
-//           originalFileName: file.originalname, // Name of uploaded file
-//           public: req.body?.public,
-//           user: {
-//             _id: req.user.id,
-//             username: req.user.username,
-//             nickname: req.user.nickname,
-//           },
-//         }).save();
-//         return image;
-//       })
-//     );
-//     return res.json(images);
-//   } catch (err) {
-//     console.error(err);
-//     throw new Error("INTERNAL_SERVER_ERROR");
-//   }
-// });
 
 // Get public images
 router.get("/", async (req, res) => {
@@ -141,13 +126,12 @@ router.delete("/:imageId", async (req, res) => {
     if (!image) return res.status(404).json({ message: "NOT_FOUND" });
     // await fsPromises.unlink(`./uploads/${image.key}`);
     s3.deleteObject(
-      { Bucket: "image-upload-test-coconutsilo", Key: `raw/${image.key}` },
+      { Bucket: process.env.S3_BUCKET, Key: `test/${image.key}` },
       (err, data) => {
         if (err) {
           console.error(err);
           throw new Error("INTERNAL_SERVER_ERROR");
         }
-        console.log({ data });
       }
     );
     return res.status(200).json();
